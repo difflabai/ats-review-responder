@@ -96,7 +96,9 @@ function ghAPI(endpoint) {
 function ghGraphQL(query, variables = {}) {
   const args = ['api', 'graphql', '-f', `query=${query}`];
   for (const [k, v] of Object.entries(variables)) {
-    args.push('-f', `${k}=${v}`);
+    // Use -F for non-string types (numbers, booleans)
+    const flag = typeof v === 'string' ? '-f' : '-F';
+    args.push(flag, `${k}=${v}`);
   }
   return JSON.parse(gh(...args));
 }
@@ -116,7 +118,7 @@ function ensureRepo(owner, repo, cloneBase) {
   if (!existsSync(repoDir)) {
     mkdirSync(cloneBase, { recursive: true });
     log('info', 'Cloning repo', { owner, repo, to: repoDir });
-    execFileSync('git', ['clone', `https://github.com/${owner}/${repo}.git`, repoDir], {
+    execFileSync('git', ['clone', `git@github.com:${owner}/${repo}.git`, repoDir], {
       encoding: 'utf-8',
       timeout: 120000,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -173,10 +175,16 @@ function isActionableComment(comment) {
 function parseCommentInfo(comment) {
   const body = comment.body || '';
 
-  // Extract title from bold text: **<badges> Title**
+  // Extract title from bold text: **<sub><sub>![badge](url)</sub></sub>  Title**
   let title = '';
-  const titleMatch = body.match(/\*\*(?:<[^>]+>\s*)*(.+?)\*\*/);
-  if (titleMatch) title = titleMatch[1].trim();
+  const titleMatch = body.match(/\*\*(.+?)\*\*/s);
+  if (titleMatch) {
+    // Strip HTML tags, badge markdown, and extra whitespace
+    title = titleMatch[1]
+      .replace(/<[^>]+>/g, '')
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+      .trim();
+  }
 
   // Extract the description (everything after the bold title line)
   let description = body;
@@ -227,7 +235,7 @@ function getReviewThreadId(owner, repo, prNumber, commentDatabaseId) {
         }
       }
     }
-  `, { owner, repo, pr: String(prNumber) });
+  `, { owner, repo, pr: prNumber });
 
   const threads = result?.data?.repository?.pullRequest?.reviewThreads?.nodes || [];
   for (const thread of threads) {
@@ -322,8 +330,17 @@ async function processComment(comment, pr, owner, repo, config, state) {
   const cloneBase = config.clone_base || '/tmp/ats-review-responder';
   const repoDir = ensureRepo(owner, repo, cloneBase);
 
-  git(repoDir, 'checkout', prBranch);
-  git(repoDir, 'pull', 'origin', prBranch);
+  // Discard any leftover changes from previous runs
+  try { git(repoDir, 'checkout', '--', '.'); } catch {}
+  try { git(repoDir, 'clean', '-fd'); } catch {}
+
+  // Checkout branch — create tracking branch if only exists on remote
+  try {
+    git(repoDir, 'checkout', prBranch);
+  } catch {
+    git(repoDir, 'checkout', '-b', prBranch, `origin/${prBranch}`);
+  }
+  git(repoDir, 'reset', '--hard', `origin/${prBranch}`);
 
   // Read the file content
   const fileContent = readFileFromRepo(repoDir, info.path);
@@ -337,33 +354,25 @@ async function processComment(comment, pr, owner, repo, config, state) {
   const diff = getPRDiff(owner, repo, prNumber);
 
   // Build Claude prompt
-  const prompt = `You are fixing a code review comment on the file "${info.path}" in the repository ${fullRepo}.
+  const prompt = `You MUST edit the file "${info.path}" to fix the code review issue described below. Use your edit tool to make the change. Do NOT just describe the fix — actually edit the file.
 
-<review-comment>
-<title>${info.title}</title>
-<priority>${info.priority}</priority>
-<file>${info.path}</file>
-<line>${info.line || 'N/A'}</line>
-<start-line>${info.startLine || 'N/A'}</start-line>
-<description>
+Review comment title: ${info.title}
+Priority: ${info.priority}
+File: ${info.path}
+Line: ${info.line || 'N/A'}
+Start line: ${info.startLine || 'N/A'}
+
+Review comment:
 ${info.description}
-</description>
-<diff-hunk>
+
+Diff hunk for context:
 ${info.diffHunk || 'N/A'}
-</diff-hunk>
-</review-comment>
 
-<file-content path="${info.path}">
-${fileContent}
-</file-content>
-
-<pr-diff>
-${diff.slice(0, 10000)}
-</pr-diff>
-
-Fix the specific issue raised in the review comment. Make a focused, minimal change to address the concern.
-Do NOT add unrelated improvements. Only fix what the review comment asks for.
-After making the change, do NOT commit or push — just edit the file(s).`;
+INSTRUCTIONS:
+1. Read the file "${info.path}" if needed
+2. Use your Edit tool to make the minimal, focused fix for this review comment
+3. Do NOT commit, push, or make unrelated changes
+4. Do NOT just explain what to do — you MUST edit the file`;
 
   try {
     const output = await runClaude(prompt, repoDir);
