@@ -1,0 +1,14 @@
+[Unit]
+Description=ATS Review Responder
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/openclaw/projects/ats-review-responder
+ExecStart=/usr/bin/node index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,11 @@
+{
+  "repos": [
+    { "owner": "difflabai", "repo": "ats-project-runner" },
+    { "owner": "difflabai", "repo": "nanobazaar-song-seller" },
+    { "owner": "difflabai", "repo": "ada-dispatch" }
+  ],
+  "poll_interval_ms": 60000,
+  "claude_timeout_ms": 300000,
+  "telegram_chat_id": "6644666619",
+  "clone_base": "/tmp/ats-review-responder"
+}

@@ -1,0 +1,12 @@
+{
+  "name": "ats-review-responder",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Auto-fix ChatGPT Codex review comments on GitHub PRs",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "once": "node index.js --once"
+  },
+  "license": "MIT"
+}
